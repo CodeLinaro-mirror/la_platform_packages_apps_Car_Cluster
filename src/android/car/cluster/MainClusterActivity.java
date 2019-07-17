@@ -23,9 +23,8 @@ import static android.content.PermissionChecker.PERMISSION_GRANTED;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.car.Car;
-import android.car.cluster.CarInstrumentClusterManager;
-import android.car.cluster.ClusterActivityState;
-import android.car.cluster.sample.sensors.Sensors;
+import android.car.cluster.navigation.NavigationState.NavigationStateProto;
+import android.car.cluster.sensors.Sensors;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
@@ -50,7 +49,6 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.TextView;
 
-import androidx.car.cluster.navigation.NavigationState;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
 import androidx.fragment.app.FragmentManager;
@@ -63,8 +61,8 @@ import com.android.car.telephony.common.InMemoryPhoneBook;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.InvocationTargetException;
+import java.net.URISyntaxException;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -88,7 +86,13 @@ public class MainClusterActivity extends FragmentActivity implements
         ClusterRenderingService.ServiceClient {
     private static final String TAG = "Cluster.MainActivity";
 
-    private static final NavigationState NULL_NAV_STATE = new NavigationState.Builder().build();
+    private static final int NAV_FACET_ID = 0;
+    private static final int COMMS_FACET_ID = 1;
+    private static final int MEDIA_FACET_ID = 2;
+    private static final int INFO_FACET_ID = 3;
+
+    private static final NavigationStateProto NULL_NAV_STATE =
+            NavigationStateProto.getDefaultInstance();
     private static final int NO_DISPLAY = -1;
 
     private ViewPager mPager;
@@ -104,14 +108,15 @@ public class MainClusterActivity extends FragmentActivity implements
     private VirtualDisplay mPendingVirtualDisplay = null;
 
     private static final int NAVIGATION_ACTIVITY_RETRY_INTERVAL_MS = 1000;
+    private static final int NAVIGATION_ACTIVITY_RELAUNCH_DELAY_MS = 5000;
 
     private UserReceiver mUserReceiver;
     private ActivityMonitor mActivityMonitor = new ActivityMonitor();
     private final Handler mHandler = new Handler();
     private final Runnable mRetryLaunchNavigationActivity = this::tryLaunchNavigationActivity;
-    private int mNavigationDisplayId = NO_DISPLAY;
+    private VirtualDisplay mNavigationDisplay = new VirtualDisplay(NO_DISPLAY, null);
 
-    private int mPreviousFacet;
+    private int mPreviousFacet = COMMS_FACET_ID;
 
     /**
      * Description of a virtual display
@@ -162,7 +167,7 @@ public class MainClusterActivity extends FragmentActivity implements
     };
 
     private ActivityMonitor.ActivityListener mNavigationActivityMonitor = (displayId, activity) -> {
-        if (displayId != mNavigationDisplayId) {
+        if (displayId != mNavigationDisplay.mDisplayId) {
             return;
         }
         mClusterViewModel.setCurrentNavigationActivity(activity);
@@ -207,10 +212,14 @@ public class MainClusterActivity extends FragmentActivity implements
         intent.setAction(LOCAL_BINDING_ACTION);
         bindServiceAsUser(intent, mClusterRenderingServiceConnection, 0, UserHandle.SYSTEM);
 
-        registerFacet(new Facet<>(findViewById(R.id.btn_nav), 0, NavigationFragment.class));
-        registerFacet(new Facet<>(findViewById(R.id.btn_phone), 1, PhoneFragment.class));
-        registerFacet(new Facet<>(findViewById(R.id.btn_music), 2, MusicFragment.class));
-        registerFacet(new Facet<>(findViewById(R.id.btn_car_info), 3, CarInfoFragment.class));
+        registerFacet(new Facet<>(findViewById(R.id.btn_nav),
+                NAV_FACET_ID, NavigationFragment.class));
+        registerFacet(new Facet<>(findViewById(R.id.btn_phone),
+                COMMS_FACET_ID, PhoneFragment.class));
+        registerFacet(new Facet<>(findViewById(R.id.btn_music),
+                MEDIA_FACET_ID, MusicFragment.class));
+        registerFacet(new Facet<>(findViewById(R.id.btn_car_info),
+                INFO_FACET_ID, CarInfoFragment.class));
         registerGear(findViewById(R.id.gear_parked), Sensors.Gear.PARK);
         registerGear(findViewById(R.id.gear_reverse), Sensors.Gear.REVERSE);
         registerGear(findViewById(R.id.gear_neutral), Sensors.Gear.NEUTRAL);
@@ -218,7 +227,7 @@ public class MainClusterActivity extends FragmentActivity implements
 
         mPager = findViewById(R.id.pager);
         mPager.setAdapter(new ClusterPageAdapter(getSupportFragmentManager()));
-        mOrderToFacet.get(0).mButton.requestFocus();
+        mOrderToFacet.get(NAV_FACET_ID).mButton.requestFocus();
         mNavStateController = new NavStateController(findViewById(R.id.navigation_state));
 
         mClusterViewModel = ViewModelProviders.of(this).get(ClusterViewModel.class);
@@ -227,6 +236,16 @@ public class MainClusterActivity extends FragmentActivity implements
             if (!focus) {
                 mNavStateController.update(null);
                 tryLaunchNavigationActivity();
+            }
+        });
+        mClusterViewModel.getNavigationActivityState().observe(this, state -> {
+            if (state == ClusterViewModel.NavigationActivityState.LOADING) {
+                if (!mHandler.hasCallbacks(mRetryLaunchNavigationActivity)) {
+                    mHandler.postDelayed(mRetryLaunchNavigationActivity,
+                            NAVIGATION_ACTIVITY_RELAUNCH_DELAY_MS);
+                }
+            } else {
+                mHandler.removeCallbacks(mRetryLaunchNavigationActivity);
             }
         });
 
@@ -241,7 +260,7 @@ public class MainClusterActivity extends FragmentActivity implements
 
         mUserReceiver = new UserReceiver(this);
         mUserReceiver.register(this);
-        
+
         InMemoryPhoneBook.init(this);
 
         PhoneFragmentViewModel phoneViewModel = ViewModelProviders.of(this).get(
@@ -250,8 +269,10 @@ public class MainClusterActivity extends FragmentActivity implements
         phoneViewModel.setPhoneStateCallback(new PhoneFragmentViewModel.PhoneStateCallback() {
             @Override
             public void onCall() {
-                mPreviousFacet = mPager.getCurrentItem();
-                mOrderToFacet.get(1).mButton.requestFocus();
+                if (mPager.getCurrentItem() != COMMS_FACET_ID) {
+                    mPreviousFacet = mPager.getCurrentItem();
+                }
+                mOrderToFacet.get(COMMS_FACET_ID).mButton.requestFocus();
             }
 
             @Override
@@ -292,7 +313,7 @@ public class MainClusterActivity extends FragmentActivity implements
     }
 
     @Override
-    public void onNavigationStateChange(NavigationState state) {
+    public void onNavigationStateChange(NavigationStateProto state) {
         Log.d(TAG, "onNavigationStateChange: " + state);
         if (mNavStateController != null) {
             mNavStateController.update(state);
@@ -302,7 +323,7 @@ public class MainClusterActivity extends FragmentActivity implements
     public void updateNavDisplay(VirtualDisplay virtualDisplay) {
         // Starting the default navigation activity. This activity will be shown when navigation
         // focus is not taken.
-        startNavigationActivity(virtualDisplay.mDisplayId);
+        startNavigationActivity(virtualDisplay);
         // Notify the service (so it updates display properties on car service)
         if (mService == null) {
             // Service is not bound yet. Hold the information and notify when the service is bound.
@@ -368,10 +389,10 @@ public class MainClusterActivity extends FragmentActivity implements
         }
     }
 
-    private void startNavigationActivity(int displayId) {
-        mActivityMonitor.removeListener(mNavigationDisplayId, mNavigationActivityMonitor);
-        mActivityMonitor.addListener(displayId, mNavigationActivityMonitor);
-        mNavigationDisplayId = displayId;
+    private void startNavigationActivity(VirtualDisplay virtualDisplay) {
+        mActivityMonitor.removeListener(mNavigationDisplay.mDisplayId, mNavigationActivityMonitor);
+        mActivityMonitor.addListener(virtualDisplay.mDisplayId, mNavigationActivityMonitor);
+        mNavigationDisplay = virtualDisplay;
         tryLaunchNavigationActivity();
     }
 
@@ -382,7 +403,7 @@ public class MainClusterActivity extends FragmentActivity implements
      * have a default navigation activity selected yet.
      */
     private void tryLaunchNavigationActivity() {
-        if (mNavigationDisplayId == NO_DISPLAY) {
+        if (mNavigationDisplay.mDisplayId == NO_DISPLAY) {
             if (Log.isLoggable(TAG, Log.DEBUG)) {
                 Log.d(TAG, String.format("Launch activity ignored (no display yet)"));
             }
@@ -398,14 +419,17 @@ public class MainClusterActivity extends FragmentActivity implements
             if (navigationActivity == null) {
                 throw new ActivityNotFoundException();
             }
-            Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(CarInstrumentClusterManager
-                    .CATEGORY_NAVIGATION)
-                    .setPackage(navigationActivity.getPackageName())
+            ClusterActivityState activityState = ClusterActivityState
+                    .create(true, mNavigationDisplay.mUnobscuredBounds);
+            Intent intent = new Intent(Intent.ACTION_MAIN)
                     .setComponent(navigationActivity)
-                    .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            Log.d(TAG, "Launching: " + intent + " on display: " + mNavigationDisplayId);
+                    .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra(CarInstrumentClusterManager.KEY_EXTRA_ACTIVITY_STATE,
+                            activityState.toBundle());
+
+            Log.d(TAG, "Launching: " + intent + " on display: " + mNavigationDisplay.mDisplayId);
             Bundle activityOptions = ActivityOptions.makeBasic()
-                    .setLaunchDisplayId(mNavigationDisplayId)
+                    .setLaunchDisplayId(mNavigationDisplay.mDisplayId)
                     .toBundle();
 
             startActivityAsUser(intent, activityOptions, UserHandle.CURRENT);
@@ -420,55 +444,50 @@ public class MainClusterActivity extends FragmentActivity implements
 
     /**
      * Returns a default navigation activity to show in the cluster.
-     * In the current implementation we search for an activity with the
-     * {@link Car#CAR_CATEGORY_NAVIGATION} category from the same navigation app
-     * selected from CarLauncher (see CarLauncher#getMapsIntent()).
+     * In the current implementation we obtain this activity from an intent defined in a resources
+     * file (which OEMs can overlay).
      * Alternatively, other implementations could:
      * <ul>
-     * <li>Read this package from a resource (having a OEM default activity to show)
+     * <li>Dynamically detect what's the default navigation activity the user has selected on the
+     * head unit, and obtain the activity marked with
+     * {@link CarInstrumentClusterManager#CATEGORY_NAVIGATION} from the same package.
      * <li>Let the user select one from settings.
      * </ul>
      */
     private ComponentName getNavigationActivity() {
         PackageManager pm = getPackageManager();
         int userId = ActivityManager.getCurrentUser();
+        String intentString = getString(R.string.freeNavigationIntent);
 
-        // Get currently selected navigation app.
-        Intent intent = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN,
-                Intent.CATEGORY_APP_MAPS);
-        ResolveInfo navigationApp = pm.resolveActivityAsUser(intent,
-                PackageManager.MATCH_DEFAULT_ONLY, userId);
-
-        // Check that it has the right permissions
-        if (pm.checkPermission(Car.PERMISSION_CAR_DISPLAY_IN_CLUSTER, navigationApp.activityInfo
-                .packageName) != PERMISSION_GRANTED) {
-            Log.i(TAG, String.format("Package '%s' doesn't have permission %s",
-                    navigationApp.activityInfo.packageName,
-                    Car.PERMISSION_CAR_DISPLAY_IN_CLUSTER));
+        if (intentString == null) {
+            Log.w(TAG, "No free navigation activity defined");
             return null;
         }
+        Log.i(TAG, "Free navigation intent: " + intentString);
 
-        // Get all possible cluster activities
-        intent = new Intent(Intent.ACTION_MAIN).addCategory(CarInstrumentClusterManager
-                .CATEGORY_NAVIGATION);
-        List<ResolveInfo> candidates = pm.queryIntentActivitiesAsUser(intent, 0, userId);
-
-        // If there is a select navigation app, try finding a matching auxiliary navigation activity
-        if (navigationApp != null) {
-            for (ResolveInfo candidate : candidates) {
-                if (candidate.activityInfo.packageName.equals(navigationApp.activityInfo
-                        .packageName)) {
-                    Log.d(TAG, "Found activity: " + candidate);
-                    return new ComponentName(candidate.activityInfo.packageName,
-                            candidate.activityInfo.name);
-                }
+        try {
+            Intent intent = Intent.parseUri(intentString, Intent.URI_INTENT_SCHEME);
+            ResolveInfo navigationApp = pm.resolveActivityAsUser(intent,
+                    PackageManager.MATCH_DEFAULT_ONLY, userId);
+            if (navigationApp == null) {
+                return null;
             }
-        }
 
-        // During initialization implicit intents might not provided a result. We will just
-        // retry until we find one, or we exhaust the retries.
-        Log.d(TAG, "No default activity found (it might not be available yet).");
-        return null;
+            // Check that it has the right permissions
+            if (pm.checkPermission(Car.PERMISSION_CAR_DISPLAY_IN_CLUSTER, navigationApp.activityInfo
+                    .packageName) != PERMISSION_GRANTED) {
+                Log.i(TAG, String.format("Package '%s' doesn't have permission %s",
+                        navigationApp.activityInfo.packageName,
+                        Car.PERMISSION_CAR_DISPLAY_IN_CLUSTER));
+                return null;
+            }
+
+            return new ComponentName(navigationApp.activityInfo.packageName,
+                    navigationApp.activityInfo.name);
+        } catch (URISyntaxException ex) {
+            Log.e(TAG, "Unable to parse free navigation activity intent: '" + intentString + "'");
+            return null;
+        }
     }
 
     private void registerGear(View view, Sensors.Gear gear) {
