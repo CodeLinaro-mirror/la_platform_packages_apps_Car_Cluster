@@ -180,13 +180,14 @@ public class ClusterRenderingService extends InstrumentClusterRenderingService i
     public void onDestroy() {
         super.onDestroy();
         mUserReceiver.unregister(this);
+        mDisplayProvider.release();
     }
 
     private void launchMainActivity() {
         mHandler.removeCallbacks(mLaunchMainActivity);
         ActivityOptions options = ActivityOptions.makeBasic();
         options.setLaunchDisplayId(mClusterDisplayId);
-        boolean useNavigationOnly = true;  // getResources().getBoolean(R.bool.navigationOnly);
+        boolean useNavigationOnly = getResources().getBoolean(R.bool.navigationOnly);
         Intent intent;
         int userId = UserHandle.USER_SYSTEM;
         if (useNavigationOnly) {
