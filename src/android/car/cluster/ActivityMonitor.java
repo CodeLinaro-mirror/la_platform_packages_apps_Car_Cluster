@@ -18,7 +18,7 @@ package android.car.cluster;
 import android.annotation.Nullable;
 import android.annotation.UiThread;
 import android.app.ActivityManager;
-import android.app.ActivityManager.StackInfo;
+import android.app.ActivityTaskManager.RootTaskInfo;
 import android.app.IActivityManager;
 import android.app.IProcessObserver;
 import android.app.TaskStackListener;
@@ -38,7 +38,7 @@ import java.util.Set;
  * Top activity monitor, allows listeners to be notified when a new activity comes to the foreground
  * on a particular device.
  *
- * As a sanity check {@link #notifyTopActivities} is handed to the UI thread because it is triggered
+ * As a quick check {@link #notifyTopActivities} is handed to the UI thread because it is triggered
  * by {@link #mProcessObserver} and {@link #mTaskStackListener}, which may be called by background
  * threads.
  *
@@ -164,8 +164,8 @@ public class ActivityMonitor {
                 if (mActivityManager == null) {
                     return;
                 }
-                List<StackInfo> infos = mActivityManager.getAllStackInfos();
-                for (StackInfo info : infos) {
+                List<RootTaskInfo> infos = mActivityManager.getAllRootTaskInfos();
+                for (RootTaskInfo info : infos) {
                     if (!info.visible) {
                         continue;
                     }

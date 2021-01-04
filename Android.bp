@@ -40,11 +40,12 @@ android_app {
         "car-media-common",
         "car-telephony-common",
         "car-apps-common",
+        "com.android.car.internal.common",
     ],
 
     libs: ["android.car"],
 
-    required: ["privapp_whitelist_android.car.cluster"],
+    required: ["allowed_privapp_android.car.cluster"],
 
     product_variables: {
         pdk: {
