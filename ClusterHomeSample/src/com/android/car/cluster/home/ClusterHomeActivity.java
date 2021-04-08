@@ -25,19 +25,15 @@ import android.util.Log;
 import android.view.View;
 import android.view.WindowManager;
 
-
+/**
+ * Skeleton Activity for Home UI in Cluster display.
+ */
 public class ClusterHomeActivity extends Activity {
-    private static final String TAG = ClusterHomeActivity.class.getSimpleName();
-
-    /**
-     * Called with the activity is first created.
-     */
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        View view = getLayoutInflater().inflate(R.layout.cluster_home_activity, null);
+        View view = getLayoutInflater().inflate(R.layout.cluster_home_activity, /* root= */ null);
         setContentView(view);
-    }
+  }
 }
-
