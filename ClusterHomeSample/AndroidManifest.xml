@@ -23,8 +23,6 @@
     <uses-permission android:name="android.permission.MANAGE_ACTIVITY_TASKS"/>
     <!-- for ClusterHomeManager -->
     <uses-permission android:name="android.car.permission.CAR_INSTRUMENT_CLUSTER_CONTROL"/>
-    <!-- for CarOccupantZoneManager.getDisplayIdForDriver() -->
-    <uses-permission android:name="android.car.permission.ACCESS_PRIVATE_DISPLAY_ID"/>
     <!-- for CarInputManager.requestInputEventCapture() -->
     <uses-permission android:name="android.car.permission.CAR_MONITOR_INPUT"/>
 
@@ -41,6 +39,7 @@
                 android:excludeFromRecents="true"
                 android:screenOrientation="nosensor"
                 android:launchMode="singleTask"
+                android:configChanges="uiMode|mcc|mnc"
                 android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
             <meta-data android:name="distractionOptimized" android:value="true"/>
             <intent-filter>
@@ -49,12 +48,13 @@
             </intent-filter>
         </activity>
         <activity android:name=".FakeFreeNavigationActivity"
-            android:exported="true"
-            android:showForAllUsers="true"
-            android:excludeFromRecents="true"
-            android:screenOrientation="nosensor"
-            android:launchMode="singleTask"
-            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+                android:exported="true"
+                android:showForAllUsers="true"
+                android:excludeFromRecents="true"
+                android:screenOrientation="nosensor"
+                android:launchMode="singleTask"
+                android:configChanges="uiMode|mcc|mnc"
+                android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
             <meta-data android:name="distractionOptimized" android:value="true"/>
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -67,6 +67,7 @@
                 android:excludeFromRecents="true"
                 android:screenOrientation="nosensor"
                 android:launchMode="singleTask"
+                android:configChanges="uiMode|mcc|mnc"
                 android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
             <meta-data android:name="distractionOptimized" android:value="true"/>
             <intent-filter>
@@ -80,6 +81,7 @@
                 android:excludeFromRecents="true"
                 android:screenOrientation="nosensor"
                 android:launchMode="singleTask"
+                android:configChanges="uiMode|mcc|mnc"
                 android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
             <meta-data android:name="distractionOptimized" android:value="true"/>
             <intent-filter>
