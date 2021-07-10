@@ -21,9 +21,11 @@ import static android.view.Display.INVALID_DISPLAY;
 
 import static java.lang.Integer.parseInt;
 
+import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.car.Car;
+import android.car.CarAppFocusManager;
 import android.car.cluster.navigation.NavigationState.NavigationStateProto;
 import android.car.cluster.renderer.InstrumentClusterRenderingService;
 import android.car.cluster.renderer.NavigationRenderer;
@@ -32,8 +34,11 @@ import android.car.userlib.UserHelper;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.DisplayManager.DisplayListener;
@@ -57,6 +62,7 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
@@ -64,9 +70,8 @@ import java.util.function.Consumer;
  * virtual display that is transmitted to an external screen.
  */
 public class ClusterRenderingService extends InstrumentClusterRenderingService implements
-        ImageResolver.BitmapFetcher {
+        ImageResolver.BitmapFetcher, CarAppFocusManager.OnAppFocusChangedListener {
     private static final String TAG = "Cluster.Service";
-    private static final int NAVIGATION_ACTIVITY_RETRY_INTERVAL_MS = 1000;
 
     static final String LOCAL_BINDING_ACTION = "local";
     static final String NAV_STATE_PROTO_BUNDLE_KEY = "navstate2";
@@ -82,6 +87,8 @@ public class ClusterRenderingService extends InstrumentClusterRenderingService i
     private final ImageResolver mImageResolver = new ImageResolver(this);
     private final Handler mHandler = new Handler();
     private final Runnable mLaunchMainActivity = this::launchMainActivity;
+    private ComponentName mNavigationClusterActivity = null;
+    private CarAppFocusManager mAppFocusManager = null;
 
     private final UserReceiver mUserReceiver = new UserReceiver();
 
@@ -165,15 +172,41 @@ public class ClusterRenderingService extends InstrumentClusterRenderingService i
     public void onCreate() {
         super.onCreate();
         Log.d(TAG, "onCreate");
+        // The following will never be null, as this service is initiated by CarService itself.
+        Car car = Car.createCar(this);
+        mAppFocusManager = (CarAppFocusManager) car.getCarManager(Car.APP_FOCUS_SERVICE);
+        mAppFocusManager.addFocusListener(this, CarAppFocusManager.APP_FOCUS_TYPE_NAVIGATION);
         mDisplayProvider = new ClusterDisplayProvider(this, mDisplayListener);
-
         mUserReceiver.register(this);
+        mNavigationClusterActivity = getNavigationClusterActivity();
+        Log.i(TAG, "onCreate: set cluster to " + mNavigationClusterActivity);
     }
 
+    @Override
     public void onDestroy() {
         super.onDestroy();
+        mAppFocusManager.removeFocusListener(this, CarAppFocusManager.APP_FOCUS_TYPE_NAVIGATION);
         mUserReceiver.unregister(this);
         mDisplayProvider.release();
+    }
+
+    @Override
+    public void onAppFocusChanged(int appType, boolean active) {
+        ComponentName newClusterActivity = getNavigationClusterActivity();
+
+        // If the navigation activity changes and this is the main activity of the cluster,
+        // launch the new activity.
+        boolean useNavigationOnly = getResources().getBoolean(R.bool.navigationOnly);
+        if (useNavigationOnly) {
+            if (!Objects.equals(newClusterActivity, mNavigationClusterActivity)) {
+                onNavigationComponentChanged(newClusterActivity, active);
+                mNavigationClusterActivity = newClusterActivity;
+                Log.i(TAG, "onAppFocusChanged: set cluster to " + mNavigationClusterActivity);
+                launchMainActivity();
+            }
+        } else {
+            // TODO(b/193931272): Update MainClusterActivity
+        }
     }
 
     private void launchMainActivity() {
@@ -184,11 +217,7 @@ public class ClusterRenderingService extends InstrumentClusterRenderingService i
         Intent intent;
         int userId = UserHandle.USER_SYSTEM;
         if (useNavigationOnly) {
-            intent = getNavigationActivityIntent(mClusterDisplayId);
-            if (intent == null) {
-                mHandler.postDelayed(mLaunchMainActivity, NAVIGATION_ACTIVITY_RETRY_INTERVAL_MS);
-                return;
-            }
+            intent = getNavigationActivityIntent(mNavigationClusterActivity, mClusterDisplayId);
             userId = ActivityManager.getCurrentUser();
             if (UserHelper.isHeadlessSystemUser(userId)) {
                 Log.i(TAG, "Skipping the navigation activity for User 0");
@@ -203,15 +232,102 @@ public class ClusterRenderingService extends InstrumentClusterRenderingService i
                 + ", userId=" + userId);
     }
 
+    /**
+     * Invoked when the activity to show in the cluster changes
+     *
+     * @param clusterActivity current activity displayed in cluster. If no application is holding
+     *                        {@link CarAppFocusManager#APP_FOCUS_TYPE_NAVIGATION}, this will be the
+     *                        default map cluster activity. Otherwise, this will be the cluster
+     *                        activity of the focused application (if it has one) or null if the
+     *                        application doesn't have a cluster activity or the activity is
+     *                        disabled.
+     * @param active          true if an application has navigation focus, or false otherwise.
+     */
+    protected void onNavigationComponentChanged(@Nullable ComponentName clusterActivity,
+            boolean active) {
+        // This method can be used by OEMs to send a signal to the cluster hardware indicating
+        // whether Android has or doesn't have a cluster activity.
+        //
+        // OEMs can use this signal to let the cluster show some other view, or to hide Android's
+        // video feed altogether.
+    }
+
     private Intent getMainClusterActivityIntent() {
         return new Intent(this, MainClusterActivity.class).setFlags(FLAG_ACTIVITY_NEW_TASK);
     }
 
-    private Intent getNavigationActivityIntent(int displayId) {
-        ComponentName component = MainClusterActivity.getNavigationActivity(this);
+    private ComponentName getNavigationClusterActivity() {
+        List<String> focusOwnerPackageNames = mAppFocusManager.getAppTypeOwner(
+                CarAppFocusManager.APP_FOCUS_TYPE_NAVIGATION);
+
+        if (focusOwnerPackageNames == null || focusOwnerPackageNames.isEmpty()) {
+            // No application has focus. We use the default navigation app.
+            Log.i(TAG, "getNavigationClusterActivity(): no focus owner -> "
+                    + "using default nav app");
+            return MainClusterActivity.getNavigationActivity(this);
+        } else {
+            ComponentName clusterActivity = getComponentFromPackages(focusOwnerPackageNames);
+            if (clusterActivity == null) {
+                // If currently focused app has no cluster activity, we indicate so.
+                Log.i(TAG, "getNavigationClusterActivity(): focus owned by "
+                        + focusOwnerPackageNames + " but it has no cluster activity -> "
+                        + "using empty activity");
+                return null;
+            } else if (!isNavigationActivityEnabled(clusterActivity)) {
+                // If the activity of the focused app is not enabled, we work as if this app
+                // didn't have an activity at all.
+                Log.i(TAG, "getNavigationClusterActivity(): focus owned by "
+                        + focusOwnerPackageNames + " but its cluster activity is disabled -> "
+                        + "using empty activity");
+                return null;
+            } else {
+                // Otherwise, we use the activity of the currently focused app
+                Log.i(TAG, "getNavigationClusterActivity(): focus owned and it has a cluster "
+                        + "activity -> using " + focusOwnerPackageNames + " app");
+                return clusterActivity;
+            }
+        }
+    }
+
+    private ComponentName getComponentFromPackages(List<String> packageNames) {
+        for (String packageName : packageNames) {
+            ComponentName result = getComponentFromPackage(packageName);
+            if (result != null) {
+                return result;
+            }
+        }
+        return null;
+    }
+
+    private boolean isNavigationActivityEnabled(ComponentName component) {
+        UserHandle user = UserHandle.of(ActivityManager.getCurrentUser());
+        PackageManager packageManager = createContextAsUser(user, 0).getPackageManager();
+        int result = packageManager.getComponentEnabledSetting(component);
+        Log.i(TAG, "isNavigationActivityEnabled(): " + result);
+        switch (result) {
+            case PackageManager.COMPONENT_ENABLED_STATE_ENABLED:
+                return true;
+            case PackageManager.COMPONENT_ENABLED_STATE_DISABLED:
+                return false;
+            case PackageManager.COMPONENT_ENABLED_STATE_DEFAULT:
+            default:
+                try {
+                    ActivityInfo info = packageManager.getActivityInfo(component,
+                            PackageManager.MATCH_ANY_USER);
+                    Log.i(TAG, "isNavigationActivityEnabled(): info.isEnabled() = "
+                            + info.isEnabled());
+                    return info.isEnabled();
+                } catch (PackageManager.NameNotFoundException ex) {
+                    Log.e(TAG, "isNavigationActivityEnabled(): " + component + " not found");
+                    return false;
+                }
+        }
+    }
+
+    private Intent getNavigationActivityIntent(ComponentName component, int displayId) {
         if (component == null) {
-            Log.e(TAG, "Failed to resolve the navigation activity");
-            return null;
+            Log.i(TAG, "Focused application doesn't have a cluster activity. Using fallback.");
+            component = new ComponentName(this, EmptyNavigationActivity.class);
         }
         Rect displaySize = new Rect(0, 0, 240, 320);  // Arbitrary size, better than nothing.
         DisplayManager dm = getSystemService(DisplayManager.class);
