@@ -377,7 +377,7 @@ public class ClusterRenderingService extends InstrumentClusterRenderingService i
     @Override
     protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
         if (args != null && args.length > 0) {
-            execShellCommand(args);
+            execShellCommand(writer, args);
         } else {
             super.dump(fd, writer, args);
             writer.println("DisplayProvider: " + mDisplayProvider);
@@ -417,7 +417,7 @@ public class ClusterRenderingService extends InstrumentClusterRenderingService i
                 null /* characters */);
     }
 
-    private void execShellCommand(String[] args) {
+    private void execShellCommand(PrintWriter writer, String[] args) {
         Log.i(TAG, "execShellCommand, args: " + Arrays.toString(args));
 
         String command = args[0];
@@ -432,18 +432,16 @@ public class ClusterRenderingService extends InstrumentClusterRenderingService i
                 break;
             }
             case "destroyOverlayDisplay": {
-                Settings.Global.putString(getContentResolver(),
-                        Global.OVERLAY_DISPLAY_DEVICES, "");
+                writer.println("Error: destroyOverlayDisplay is no longer supported.");
+                writer.println("Use the 'settings delete global " + Global.OVERLAY_DISPLAY_DEVICES
+                          + "' shell command instead.");
                 break;
             }
 
             case "createOverlayDisplay": {
-                if (args.length > 1) {
-                    Settings.Global.putString(getContentResolver(),
-                            Global.OVERLAY_DISPLAY_DEVICES, args[1]);
-                } else {
-                    Log.i(TAG, "Not enough arguments, expected 2");
-                }
+                writer.println("Error: createOverlayDisplay is no longer supported.");
+                writer.println("Use the 'settings put global " + Global.OVERLAY_DISPLAY_DEVICES
+                          + "' shell command instead.");
                 break;
             }
 
