@@ -304,6 +304,14 @@ public final class ClusterHomeApplication extends Application {
         for (int i = resolveList.size() - 1; i >= 0; --i) {
             ActivityInfo activityInfo = resolveList.get(i).activityInfo;
             if (DBG) Log.d(TAG, "Found: " + activityInfo.packageName + "/" + activityInfo.name);
+            if (mPackageManager.checkPermission(Car.PERMISSION_CAR_DISPLAY_IN_CLUSTER,
+                    activityInfo.packageName) != PackageManager.PERMISSION_GRANTED) {
+                if (DBG) {
+                    Log.d(TAG, "Skip this, because " + activityInfo.packageName
+                            + " does not have " + Car.PERMISSION_CAR_DISPLAY_IN_CLUSTER);
+                }
+                continue;
+            }
             // Some package can have multiple navigation Activities, we choose the default one only.
             if (clusterPackages.contains(activityInfo.packageName)) {
                 if (DBG) {
